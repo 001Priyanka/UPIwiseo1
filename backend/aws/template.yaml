@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  UPIwise - AWS Serverless Backend
+  AWS API Gateway + AWS Lambda + AWS DynamoDB for Deterministic UPI MDR Calculations
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        DYNAMODB_TABLE_NAME: !Ref CalculationsTable
+        CORS_ALLOW_ORIGIN: "*"
+        NODE_ENV: production
+
+Resources:
+  # ============================================================================
+  # DynamoDB Table: upi-costguard-calculations
+  # Partition Key: calculationId (String)
+  # Billing: Pay-per-request (On-Demand)
+  # ============================================================================
+  CalculationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: upi-costguard-calculations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: calculationId
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: calculationId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: UPIwise
+        - Key: Environment
+          Value: Production
+
+  # ============================================================================
+  # API Gateway HTTP API with CORS
+  # ============================================================================
+  UpiCostguardHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: upi-costguard-api
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Amz-Date
+          - X-Api-Key
+          - X-Amz-Security-Token
+          - X-Requested-With
+        AllowOrigins:
+          - "*"
+        MaxAge: 86400
+
+  # ============================================================================
+  # Unified AWS Lambda Function
+  # ============================================================================
+  UpiCostguardApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: upi-costguard-api-handler
+      Description: Validates UPI transactions, executes deterministic MDR calculation, and persists to DynamoDB
+      CodeUri: ../../dist-lambda/
+      Handler: index.handler
+      Policies:
+        # Minimal least-privilege policy for DynamoDB
+        - Statement:
+            - Sid: DynamoDBTableAccess
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:Scan
+                - dynamodb:Query
+                - dynamodb:DescribeTable
+              Resource:
+                - !GetAtt CalculationsTable.Arn
+                - !Sub "${CalculationsTable.Arn}/*"
+      Events:
+        # POST /analyze route
+        AnalyzePostRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref UpiCostguardHttpApi
+            Path: /analyze
+            Method: POST
+
+        # GET /history route
+        HistoryGetRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref UpiCostguardHttpApi
+            Path: /history
+            Method: GET
+
+        # GET /health route
+        HealthGetRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref UpiCostguardHttpApi
+            Path: /health
+            Method: GET
+
+        # Fallback proxy route
+        CatchAllRoute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref UpiCostguardHttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiEndpoint:
+    Description: HTTP API Gateway base URL for UPIwise frontend (set as VITE_API_BASE_URL)
+    Value: !Sub "https://${UpiCostguardHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+  TableName:
+    Description: DynamoDB Table Name
+    Value: !Ref CalculationsTable
+
+  LambdaFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt UpiCostguardApiFunction.Arn
