@@ -1,0 +1,6 @@
+{
+  "name": "UPIwise",
+  "description": "Understand your UPI payment costs and MDR calculations before they surprise you.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
